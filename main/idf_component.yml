@@ -84,6 +84,14 @@ dependencies:
     version: ^5.0.3
     rules:
     - if: target in [esp32p4]
+  trule-star/esp_lcd_jd9366:
+    version: "*"
+    rules:
+    - if: target in [esp32p4]
+  trule-star/esp_lcd_touch_jd9366:
+    version: "*"
+    rules:
+    - if: target in [esp32p4]
   espressif/esp_lcd_ili9881c:
     version: ^1.0.1
     rules:
