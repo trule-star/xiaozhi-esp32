@@ -5,4 +5,4 @@
  */
 
 #pragma once
-#include "esp32_p4c5_aiphotos_board"
+#include "tsp4c5_aiphotos_board.h"

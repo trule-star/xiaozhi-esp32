@@ -11,16 +11,16 @@
 
 #pragma once
 
-#include "sdkconfig.h"
+#include "bsp_display.h"
+#include "config.h"
+
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
+#include "driver/i2s_std.h"
 #include "driver/sdmmc_host.h"
 #include "driver/sdspi_host.h"
-#include "esp_vfs_fat.h"
-#include "driver/i2s_std.h"
-#include "bsp/config.h"
-#include "bsp/display.h"
 #include "esp_codec_dev.h"
+#include "esp_vfs_fat.h"
 #include "sdkconfig.h"
 
 #if (BSP_CONFIG_NO_GRAPHIC_LIB == 0)

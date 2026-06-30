@@ -43,16 +43,12 @@
 
 #if CONFIG_BSP_LCD_TYPE_1024_600
 /* LCD display definition 1024x600 */
-#define BSP_LCD_H_RES              (1024)
-#define BSP_LCD_V_RES              (600)
-#elif CONFIG_BSP_LCD_TYPE_800_1280
-/* LCD display definition 800x1280 */
 #define BSP_LCD_H_RES              (800)
 #define BSP_LCD_V_RES              (1280)
-#elif CONFIG_BSP_LCD_TYPE_1280_800
+#else
 /* LCD display definition 1280x800 */
-#define BSP_LCD_H_RES              (1280)
-#define BSP_LCD_V_RES              (800)
+#define BSP_LCD_H_RES              (800)
+#define BSP_LCD_V_RES              (1280)
 #endif
 
 #define BSP_LCD_MIPI_DSI_LANE_NUM          (2)    // 2 data lanes
@@ -128,8 +124,7 @@ typedef struct {
  *      - ESP_OK         On success
  *      - Else           esp_lcd failure
  */
-esp_err_t bsp_display_new(const bsp_display_config_t *config, esp_lcd_panel_handle_t *ret_panel,
-                          esp_lcd_panel_io_handle_t *ret_io);
+esp_err_t bsp_display_new(const bsp_display_config_t *config, esp_lcd_panel_handle_t *ret_panel, esp_lcd_panel_io_handle_t *ret_io);
 
 /**
  * @brief Create new display panel

@@ -29,12 +29,12 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_ldo_regulator.h"
-#include "esp_lcd_ek79007.h"
-#include "esp_lcd_touch_gt911.h"
+#include "esp_lcd_jd9366.h"
+#include "esp_lcd_touch_jd9366.h"
 
 // Library includes
-#include "bsp/esp32_p4_function_ev_board.h"
-#include "bsp/touch.h"
+#include "tsp4c5_aiphotos_board.h"
+#include "touch.h"
 
 #define TAG "TRULESTAR_P4C5_PHOTOS"
 
@@ -57,6 +57,7 @@ private:
     void InitializeTouchI2cBus()
     {
         // No implementation needed
+        ESP_ERROR_CHECK(bsp_touch_new(NULL, &tp_));
     }
 
     void InitializeLCD()
@@ -73,6 +74,7 @@ private:
         ESP_ERROR_CHECK(bsp_display_new_with_handles(&config, &handles));
 
         display_ = new MipiLcdDisplay(handles.io, handles.panel, 1024, 600, 0, 0, true, true, false);
+
     }
 
     void InitializeButtons()
@@ -88,10 +90,7 @@ private:
         });
     }
 
-    void InitializeTouch()
-    {
-        ESP_ERROR_CHECK(bsp_touch_new(NULL, &tp_));
-    }
+
 
     void InitializeSdCard()
     {
@@ -186,8 +185,8 @@ public:
         InitializeI2cBuses();
         // Audio is initialized by Es8311AudioCodec
         InitializeLCD();
+        InitializeTouchI2cBus();
         InitializeButtons();
-        InitializeTouch();
         InitializeSdCard();
         InitializeCamera();
         InitializeFonts();

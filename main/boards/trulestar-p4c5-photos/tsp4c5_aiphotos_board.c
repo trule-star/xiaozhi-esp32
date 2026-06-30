@@ -20,14 +20,15 @@
 #include "sd_pwr_ctrl_by_on_chip_ldo.h"
 
 #include "esp_lcd_jd9366.h"
-#include "bsp/esp32_p4c5_aiphotos_board.h"
-#include "bsp/display.h"
-#include "bsp/touch.h"
+#include "tsp4c5_aiphotos_board.h"
+#include "bsp_display.h"
+#include "touch.h"
 #include "esp_lcd_touch_jd9366.h"
 #include "bsp_err_check.h"
 #include "esp_codec_dev_defaults.h"
 #include "esp_video_device.h"
 #include "esp_video_init.h"
+
 
 static const char *TAG = "ESP32_P4C5_AI";
 
@@ -51,7 +52,7 @@ static esp_ldo_channel_handle_t disp_phy_pwr_chan = NULL;
 static esp_lcd_touch_handle_t tp = NULL;
 static esp_lcd_panel_io_handle_t tp_io_handle = NULL;
 
-i2c_master_bus_handle_t touch_i2c_bus_;
+
 
 /* Can be used for `i2s_std_gpio_config_t` and/or `i2s_std_config_t` initialization */
 #define BSP_I2S_GPIO_CFG       \
@@ -81,7 +82,7 @@ esp_err_t find_touch_device(void)
     bool jd9366_found = false;
 
     // 首先尝试查找JD9366 (0x68)
-    ret = i2c_master_probe(touch_i2c_bus_, 0x68, -1);
+    ret = i2c_master_probe(i2c_handle, 0x68, -1);
     if (ret == ESP_OK) {
         ESP_LOGI("I2C", "找到JD9366设备,地址: 0x68");
         jd9366_found = true;
@@ -89,7 +90,7 @@ esp_err_t find_touch_device(void)
     }
 
     // 如果没有找到JD9366，查找GT911 (0x5d)
-    ret = i2c_master_probe(touch_i2c_bus_, 0x5d, -1);
+    ret = i2c_master_probe(i2c_handle, 0x5d, -1);
     if (ret == ESP_OK) {
         ESP_LOGI("I2C", "找到GT911设备,地址: 0x5d");
         jd9366_found = true;
@@ -122,7 +123,7 @@ esp_err_t bsp_i2c_init(void)
     };
     BSP_ERROR_CHECK_RETURN_ERR(i2c_new_master_bus(&i2c_bus_conf, &i2c_handle));
 
-    touch_i2c_bus_ = i2c_handle;
+
     i2c_initialized = true;
     find_touch_device();
     return ESP_OK;
@@ -588,262 +589,129 @@ esp_err_t bsp_display_new(const bsp_display_config_t *config, esp_lcd_panel_hand
     return ret;
 }
 
+bool initialize_lvgl_display(esp_lcd_panel_io_handle_t mipi_dbi_io, esp_lcd_panel_handle_t panel_handle, esp_err_t* value1)
+{
+    //打开背光，设置默认亮度为80%
+    bsp_display_brightness_set(100);
+    //四、初始化LVGL库
+    ESP_LOGI(TAG, "Initialize LVGL library");
+    lv_init();
+    // 初始化LVGL端口
+    // 如果 lvgl_port_init 函数不可用，可以使用自定义的初始化函数
+    ESP_LOGI(TAG, "Initialize LVGL port");
+    lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+    port_cfg.task_priority = 1;
+    lvgl_port_init(&port_cfg);
+
+    // 配置显示设备
+    const lvgl_port_display_cfg_t disp_cfg = {
+        .io_handle = mipi_dbi_io,
+        .panel_handle = panel_handle,
+        .buffer_size = BSP_LCD_H_RES * BSP_LCD_V_RES, // 缓冲区大小
+        .double_buffer = true,                                              // 使用双缓冲
+        .hres = BSP_LCD_H_RES,
+        .vres = BSP_LCD_V_RES,
+        .monochrome = false, // 是否为单色显示器
+        .rotation = {
+            .swap_xy = false,
+            .mirror_x = false,
+            .mirror_y = false,
+        },
+        .color_format = BSP_LCD_COLOR_FORMAT,
+        .flags = {
+            // .sw_rotate = true,
+            // .buff_dma = true, // 使用DMA缓冲区
+            .buff_spiram = true, // 使用psram缓冲区
+            // .full_refresh = true, // 启用全屏幕刷新
+            // .swap_bytes = 1,
+        }};
+    // MIPI DSI特定配置
+    const lvgl_port_display_dsi_cfg_t dsi_cfg = {
+        .flags = {
+            .avoid_tearing = false, // 启用防撕裂
+        }};
+    // 添加MIPI DSI显示设备
+    lv_disp_t *disp = lvgl_port_add_disp_dsi(&disp_cfg, &dsi_cfg);
+    if (disp == NULL)
+    {
+        ESP_LOGE(TAG, "LVGL显示设备添加失败");
+        *value1 = ESP_FAIL;
+        return true;
+    }
+    return false;
+}
+
 esp_err_t bsp_display_new_with_handles(const bsp_display_config_t *config, bsp_lcd_handles_t *ret_handles)
 {
     esp_err_t ret = ESP_OK;
-    esp_lcd_panel_io_handle_t mipi_dbi_io = NULL;
-    esp_lcd_panel_handle_t disp_panel = NULL;
+    bsp_enable_dsi_phy_power();
+    bsp_display_backlight_off();
 
-    ESP_RETURN_ON_ERROR(bsp_display_brightness_init(), TAG, "Brightness init failed");
-    ESP_RETURN_ON_ERROR(bsp_enable_dsi_phy_power(), TAG, "DSI PHY power failed");
 
-    /* create MIPI DSI bus first, it will initialize the DSI PHY as well */
-    esp_lcd_dsi_bus_handle_t mipi_dsi_bus = NULL;
+    //一、 首先创建 MIPI DSI 总线，它还将初始化 DSI PHY
+    esp_lcd_dsi_bus_handle_t mipi_dsi_bus;
     esp_lcd_dsi_bus_config_t bus_config = {
         .bus_id = 0,
         .num_data_lanes = BSP_LCD_MIPI_DSI_LANE_NUM,
         .phy_clk_src = config->dsi_bus.phy_clk_src,
         .lane_bit_rate_mbps = config->dsi_bus.lane_bit_rate_mbps,
     };
-    ESP_RETURN_ON_ERROR(esp_lcd_new_dsi_bus(&bus_config, &mipi_dsi_bus), TAG, "New DSI bus init failed");
 
-#if !CONFIG_BSP_LCD_TYPE_HDMI
-    if (config->hdmi_resolution != BSP_HDMI_RES_NONE) {
-        ESP_LOGW(TAG, "Please select HDMI in menuconfig, if you want to use it.");
-    }
 
-    ESP_LOGI(TAG, "Install MIPI DSI LCD control panel");
-    // we use DBI interface to send LCD commands and parameters
-    esp_lcd_dbi_io_config_t dbi_config = {
-        .virtual_channel = 0,
-        .lcd_cmd_bits = 8,   // according to the LCD spec
-        .lcd_param_bits = 8, // according to the LCD spec
-    };
-    ESP_GOTO_ON_ERROR(esp_lcd_new_panel_io_dbi(mipi_dsi_bus, &dbi_config, &mipi_dbi_io), err, TAG, "New panel IO failed");
-#endif
+    ESP_ERROR_CHECK(esp_lcd_new_dsi_bus(&bus_config, &mipi_dsi_bus));
 
-#if CONFIG_BSP_LCD_TYPE_800_1280
-    // create JD9366 control panel
-    ESP_LOGI(TAG, "Install JD9366 LCD control panel");
-    // 创建JD9366控制面板
+    //二、 安装 MIPI DSI LCD 控制面板，
+    esp_lcd_panel_io_handle_t mipi_dbi_io;
+    esp_lcd_dbi_io_config_t dbi_config = JD9366_PANEL_IO_DBI_CONFIG();
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_dbi(mipi_dsi_bus, &dbi_config, &mipi_dbi_io));
+    //三、 创建JD9366控制面板
     esp_lcd_panel_handle_t panel_handle;
-
-#if CONFIG_BSP_LCD_COLOR_FORMAT_RGB888
-    esp_lcd_dpi_panel_config_t dpi_config = JD9366_800_1280_PANEL_60HZ_DPI_CONFIG(LCD_COLOR_FMT_RGB888);
-#else
-    esp_lcd_dpi_panel_config_t dpi_config = JD9366_800_1280_PANEL_60HZ_DPI_CONFIG(LCD_COLOR_FMT_RGB565);
-#endif
-
+    esp_lcd_dpi_panel_config_t dpi_config = JD9366_800_1280_PANEL_60HZ_DPI_CONFIG(LCD_COLOR_PIXEL_FORMAT_RGB565);
     dpi_config.num_fbs = CONFIG_BSP_LCD_DPI_BUFFER_NUMS;
-
-#if CONFIG_BSP_LCD_USE_DMA2D && (ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(6, 0, 0))
-    dpi_config.flags.use_dma2d = true;
-#endif
-
+    //JD9366驱动配置
     jd9366_vendor_config_t vendor_config = {
         .mipi_config = {
             .dsi_bus = mipi_dsi_bus,
             .dpi_config = &dpi_config,
         },
     };
-    esp_lcd_panel_dev_config_t lcd_dev_config = {
-        .bits_per_pixel = 16,
-        .rgb_ele_order = BSP_LCD_COLOR_SPACE,
+    const esp_lcd_panel_dev_config_t lcd_dev_config = {
         .reset_gpio_num = BSP_LCD_RST,
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
         .bits_per_pixel = BSP_LCD_BITS_PER_PIXEL,
         .vendor_config = &vendor_config,
     };
-    ESP_GOTO_ON_ERROR(esp_lcd_new_panel_jd9366(mipi_dbi_io, &lcd_dev_config, &disp_panel), err, TAG,
-                      "New LCD panel jD9366 failed");
 
     vTaskDelay(1000);
-    ESP_ERROR_CHECK(esp_lcd_new_panel_jd9366(mipi_dbi_io, &lcd_dev_config, &panel_handle));
-    ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
-    ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
-    ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
 
-    bsp_display_backlight_on();
-#if CONFIG_BSP_LCD_USE_DMA2D && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0))
-    ESP_GOTO_ON_ERROR(esp_lcd_dpi_panel_enable_dma2d(disp_panel), err, TAG, "LCD panel enable DMA2D failed");
-#endif
-    // 尝试初始化JD9366 I2C触摸
-    ESP_LOGI(TAG, "Install MIPI DSI JD9366 control panel");
-    ESP_RETURN_ON_ERROR(bsp_i2c_init(), TAG, "I2C init failed");
-    esp_lcd_panel_io_i2c_config_t tp_io_config = ESP_LCD_TOUCH_IO_I2C_JD9366_CONFIG();
-    tp_io_config.scl_speed_hz = 400000;
 
-#if ((ESP_IDF_VERSION_MAJOR == 5 && ESP_IDF_VERSION_MINOR >= 4) || ESP_IDF_VERSION_MAJOR > 5)
-    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c((i2c_master_bus_handle_t)touch_i2c_bus_, &tp_io_config, &tp_io_handle), TAG, "New panel IO I2C failed");
-#else
-    esp_err_t ret = esp_lcd_new_panel_io_i2c_v2((esp_lcd_i2c_bus_handle_t)touch_i2c_bus_, &tp_io_config, &tp_io_handle);
-#endif
-    ESP_GOTO_ON_ERROR(esp_lcd_panel_reset(disp_panel), err, TAG, "LCD panel reset failed");
-    ESP_GOTO_ON_ERROR(esp_lcd_panel_init(disp_panel), err, TAG, "LCD panel init failed");
+    ESP_GOTO_ON_ERROR(esp_lcd_new_panel_jd9366(mipi_dbi_io, &lcd_dev_config, &panel_handle), err, TAG, "New LCD panel jd9366 failed");
+    ESP_GOTO_ON_ERROR(esp_lcd_panel_reset(panel_handle), err, TAG, "LCD panel reset failed");
+    ESP_GOTO_ON_ERROR(esp_lcd_panel_init(panel_handle), err, TAG, "LCD panel init failed");
 
-#elif CONFIG_BSP_LCD_TYPE_1024_600
-    // create ILI9881C control panel
-    ESP_LOGI(TAG, "Install ILI9881C LCD control panel");
-#if CONFIG_BSP_LCD_COLOR_FORMAT_RGB888
-    esp_lcd_dpi_panel_config_t dpi_config = ILI9881C_800_1280_PANEL_60HZ_DPI_CONFIG_CF(LCD_COLOR_FMT_RGB888);
-#else
-    esp_lcd_dpi_panel_config_t dpi_config = ILI9881C_800_1280_PANEL_60HZ_DPI_CONFIG_CF(LCD_COLOR_FMT_RGB565);
-#endif
-    dpi_config.num_fbs = CONFIG_BSP_LCD_DPI_BUFFER_NUMS;
-
-#if CONFIG_BSP_LCD_USE_DMA2D && (ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(6, 0, 0))
-    dpi_config.flags.use_dma2d = true;
-#endif
-
-    ili9881c_vendor_config_t vendor_config = {
-        .mipi_config = {
-            .dsi_bus = mipi_dsi_bus,
-            .dpi_config = &dpi_config,
-            .lane_num = BSP_LCD_MIPI_DSI_LANE_NUM,
-        },
-    };
-    const esp_lcd_panel_dev_config_t lcd_dev_config = {
-        .reset_gpio_num = BSP_LCD_RST,
-        .rgb_ele_order = BSP_LCD_COLOR_SPACE,
-        .bits_per_pixel = 16,
-        .vendor_config = &vendor_config,
-    };
-    ESP_GOTO_ON_ERROR(esp_lcd_new_panel_ili9881c(mipi_dbi_io, &lcd_dev_config, &disp_panel), err, TAG,
-                      "New LCD panel ILI9881C failed");
-
-#if CONFIG_BSP_LCD_USE_DMA2D && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0))
-    ESP_GOTO_ON_ERROR(esp_lcd_dpi_panel_enable_dma2d(disp_panel), err, TAG, "LCD panel enable DMA2D failed");
-#endif
-
-    ESP_GOTO_ON_ERROR(esp_lcd_panel_reset(disp_panel), err, TAG, "LCD panel reset failed");
-    ESP_GOTO_ON_ERROR(esp_lcd_panel_init(disp_panel), err, TAG, "LCD panel init failed");
-    ESP_GOTO_ON_ERROR(esp_lcd_panel_disp_on_off(disp_panel, true), err, TAG, "LCD panel ON failed");
-
-#elif CONFIG_BSP_LCD_TYPE_HDMI
-
-#if !CONFIG_BSP_LCD_COLOR_FORMAT_RGB888
-#error The color format must be RGB888 in HDMI display type!
-#endif
-    ESP_LOGI(TAG, "Install MIPI DSI HDMI control panel");
-    ESP_RETURN_ON_ERROR(bsp_i2c_init(), TAG, "I2C init failed");
-
-    /* Main IO */
-    esp_lcd_panel_io_i2c_config_t io_config = LT8912B_IO_CFG(CONFIG_BSP_I2C_CLK_SPEED_HZ, LT8912B_IO_I2C_MAIN_ADDRESS);
-    ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(i2c_handle, &io_config, &mipi_dbi_io));
-
-    /* CEC DSI IO */
-    esp_lcd_panel_io_handle_t io_cec_dsi = NULL;
-    esp_lcd_panel_io_i2c_config_t io_config_cec = LT8912B_IO_CFG(CONFIG_BSP_I2C_CLK_SPEED_HZ, LT8912B_IO_I2C_CEC_ADDRESS);
-    ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(i2c_handle, &io_config_cec, &io_cec_dsi));
-
-    /* AVI IO */
-    esp_lcd_panel_io_handle_t io_avi = NULL;
-    esp_lcd_panel_io_i2c_config_t io_config_avi = LT8912B_IO_CFG(CONFIG_BSP_I2C_CLK_SPEED_HZ, LT8912B_IO_I2C_AVI_ADDRESS);
-    ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(i2c_handle, &io_config_avi, &io_avi));
-
-    esp_lcd_dpi_panel_config_t dpi_configs[] = {
-        LT8912B_800x600_PANEL_60HZ_DPI_CONFIG_WITH_FBS(CONFIG_BSP_LCD_DPI_BUFFER_NUMS),
-        LT8912B_1024x768_PANEL_60HZ_DPI_CONFIG_WITH_FBS(CONFIG_BSP_LCD_DPI_BUFFER_NUMS),
-        LT8912B_1280x720_PANEL_60HZ_DPI_CONFIG_WITH_FBS(CONFIG_BSP_LCD_DPI_BUFFER_NUMS),
-        LT8912B_1280x800_PANEL_60HZ_DPI_CONFIG_WITH_FBS(CONFIG_BSP_LCD_DPI_BUFFER_NUMS),
-        LT8912B_1920x1080_PANEL_30HZ_DPI_CONFIG_WITH_FBS(CONFIG_BSP_LCD_DPI_BUFFER_NUMS)
-    };
-
-#if CONFIG_BSP_LCD_USE_DMA2D && (ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(6, 0, 0))
-    for (int i = 0; i < sizeof(dpi_configs) / sizeof(dpi_configs[0]); i++) {
-        dpi_configs[i].flags.use_dma2d = true;
-    }
-#endif
-
-    const esp_lcd_panel_lt8912b_video_timing_t video_timings[] = {
-        ESP_LCD_LT8912B_VIDEO_TIMING_800x600_60Hz(),
-        ESP_LCD_LT8912B_VIDEO_TIMING_1024x768_60Hz(),
-        ESP_LCD_LT8912B_VIDEO_TIMING_1280x720_60Hz(),
-        ESP_LCD_LT8912B_VIDEO_TIMING_1280x800_60Hz(),
-        ESP_LCD_LT8912B_VIDEO_TIMING_1920x1080_30Hz()
-    };
-    lt8912b_vendor_config_t vendor_config = {
-        .mipi_config = {
-            .dsi_bus = mipi_dsi_bus,
-            .lane_num = BSP_LCD_MIPI_DSI_LANE_NUM,
-        },
-    };
-
-    /* DPI config */
-    switch (config->hdmi_resolution) {
-    case BSP_HDMI_RES_800x600:
-        ESP_LOGI(TAG, "HDMI configuration for 800x600@60HZ");
-        vendor_config.mipi_config.dpi_config = &dpi_configs[0];
-        memcpy(&vendor_config.video_timing, &video_timings[0], sizeof(esp_lcd_panel_lt8912b_video_timing_t));
-        break;
-    case BSP_HDMI_RES_1024x768:
-        ESP_LOGI(TAG, "HDMI configuration for 1024x768@60HZ");
-        vendor_config.mipi_config.dpi_config = &dpi_configs[1];
-        memcpy(&vendor_config.video_timing, &video_timings[1], sizeof(esp_lcd_panel_lt8912b_video_timing_t));
-        break;
-    case BSP_HDMI_RES_1280x720:
-        ESP_LOGI(TAG, "HDMI configuration for 1280x720@60HZ");
-        vendor_config.mipi_config.dpi_config = &dpi_configs[2];
-        memcpy(&vendor_config.video_timing, &video_timings[2], sizeof(esp_lcd_panel_lt8912b_video_timing_t));
-        break;
-    case BSP_HDMI_RES_1280x800:
-        ESP_LOGI(TAG, "HDMI configuration for 1280x800@60HZ");
-        vendor_config.mipi_config.dpi_config = &dpi_configs[3];
-        memcpy(&vendor_config.video_timing, &video_timings[3], sizeof(esp_lcd_panel_lt8912b_video_timing_t));
-        break;
-    case BSP_HDMI_RES_1920x1080:
-        ESP_LOGI(TAG, "HDMI configuration for 1920x1080@30HZ");
-        vendor_config.mipi_config.dpi_config = &dpi_configs[4];
-        memcpy(&vendor_config.video_timing, &video_timings[4], sizeof(esp_lcd_panel_lt8912b_video_timing_t));
-        break;
-    default:
-        ESP_LOGE(TAG, "Unsupported display type (%d)", config->hdmi_resolution);
-    }
-
-    const esp_lcd_panel_dev_config_t panel_config = {
-        .bits_per_pixel = 24,
-        .rgb_ele_order = BSP_LCD_COLOR_SPACE,
-        .reset_gpio_num = BSP_LCD_RST,
-        .vendor_config = &vendor_config,
-    };
-    const esp_lcd_panel_lt8912b_io_t io_all = {
-        .main = mipi_dbi_io,
-        .cec_dsi = io_cec_dsi,
-        .avi = io_avi,
-    };
-    ESP_ERROR_CHECK(esp_lcd_new_panel_lt8912b(&io_all, &panel_config, &disp_panel));
-
-#if CONFIG_BSP_LCD_USE_DMA2D && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0))
-    ESP_GOTO_ON_ERROR(esp_lcd_dpi_panel_enable_dma2d(disp_panel), err, TAG, "LCD panel enable DMA2D failed");
-#endif
-
-    ESP_GOTO_ON_ERROR(esp_lcd_panel_reset(disp_panel), err, TAG, "LCD panel reset failed");
-    ESP_GOTO_ON_ERROR(esp_lcd_panel_init(disp_panel), err, TAG, "LCD panel init failed");
-
-#endif //CONFIG_BSP_LCD_TYPE_
 
     /* Return all handles */
     ret_handles->io = mipi_dbi_io;
     disp_handles.io = mipi_dbi_io;
-#if CONFIG_BSP_LCD_TYPE_HDMI
-    ret_handles->io_cec = io_cec_dsi;
-    disp_handles.io_cec = io_cec_dsi;
-    ret_handles->io_avi = io_avi;
-    disp_handles.io_avi = io_avi;
-#endif
+
     ret_handles->mipi_dsi_bus = mipi_dsi_bus;
     disp_handles.mipi_dsi_bus = mipi_dsi_bus;
-    ret_handles->panel = disp_panel;
-    disp_handles.panel = disp_panel;
+    ret_handles->panel = panel_handle;
+    disp_handles.panel = panel_handle;
     ret_handles->control = NULL;
     disp_handles.control = NULL;
+    ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
 
+    //esp_err_t value1;
+    //if (initialize_lvgl_display(mipi_dbi_io, panel_handle, &value1)) return value1;
+    // lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_90);
     ESP_LOGI(TAG, "Display initialized");
 
     return ret;
-
-err:
-    bsp_display_delete();
+    err:
+        bsp_display_delete();
     return ret;
+
 }
 
 void bsp_display_delete(void)
@@ -884,6 +752,16 @@ esp_err_t bsp_touch_new(const bsp_touch_config_t *config, esp_lcd_touch_handle_t
 {
     /* Initilize I2C */
     BSP_ERROR_CHECK_RETURN_ERR(bsp_i2c_init());
+    // 尝试初始化JD9366 I2C触摸
+    esp_lcd_panel_io_handle_t tp_io_handle = NULL;
+    esp_lcd_panel_io_i2c_config_t tp_io_config = ESP_LCD_TOUCH_IO_I2C_JD9366_CONFIG();
+    tp_io_config.scl_speed_hz = 400000;
+
+#if ((ESP_IDF_VERSION_MAJOR == 5 && ESP_IDF_VERSION_MINOR >= 4) || ESP_IDF_VERSION_MAJOR > 5)
+    esp_err_t ret = esp_lcd_new_panel_io_i2c((i2c_master_bus_handle_t)i2c_handle, &tp_io_config, &tp_io_handle);
+#else
+    esp_err_t ret = esp_lcd_new_panel_io_i2c_v2((esp_lcd_i2c_bus_handle_t)i2c_handle, &tp_io_config, &tp_io_handle);
+#endif
 
     /* Initialize touch */
     const esp_lcd_touch_config_t tp_cfg = {
@@ -897,23 +775,16 @@ esp_err_t bsp_touch_new(const bsp_touch_config_t *config, esp_lcd_touch_handle_t
         },
         .flags = {
             .swap_xy = 0,
-            .mirror_x = 1,
-            .mirror_y = 1,
+            .mirror_x = 0,
+            .mirror_y = 0,
         },
     };
-#if CONFIG_BSP_LCD_TYPE_800_1280
-    /* JD9366 触摸初始化 */
-    esp_lcd_panel_io_i2c_config_t tp_io_config = ESP_LCD_TOUCH_IO_I2C_JD9366_CONFIG();
-    tp_io_config.scl_speed_hz = CONFIG_BSP_I2C_CLK_SPEED_HZ;
-    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c(i2c_handle, &tp_io_config, &tp_io_handle), TAG, "");
-    return esp_lcd_touch_new_i2c_jd9366(tp_io_handle, &tp_cfg, ret_touch);
-#else
-    /* GT911 触摸初始化 */
-    esp_lcd_panel_io_i2c_config_t tp_io_config = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
-    tp_io_config.scl_speed_hz = CONFIG_BSP_I2C_CLK_SPEED_HZ;
-    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c(i2c_handle, &tp_io_config, &tp_io_handle), TAG, "");
-    return esp_lcd_touch_new_i2c_gt911(tp_io_handle, &tp_cfg, ret_touch);
-#endif
+
+    ret = esp_lcd_touch_new_i2c_jd9366(tp_io_handle, &tp_cfg, ret_touch);
+    if (ret == ESP_OK && ret_touch != NULL) {
+        ESP_LOGI(TAG, "JD9366 I2C触摸设备初始化成功");
+    }
+    return ret;
 
 }
 
