@@ -456,9 +456,12 @@ choice BOARD_TYPE
     config BOARD_TYPE_TUDOUZI
         bool "土豆子"
         depends on IDF_TARGET_ESP32S3
-    config BOARD_TYPE_TRULE_STAR_P4C5_PHOTOS
-        bool "TRULE-STAR P4C5 Photos"
+    config BOARD_TYPE_TRULESTAR_P4C5_PHOTOS
+        bool "Trulestar P4C5 Photos"
         depends on IDF_TARGET_ESP32P4
+    config BOARD_TYPE_TRULESTAR_C3_LIGTH
+        bool "Trulestar C3 light"
+        depends on IDF_TARGET_ESP32C3
     config BOARD_TYPE_LILYGO_T_CIRCLE_S3
         bool "LILYGO T-Circle-S3"
         depends on IDF_TARGET_ESP32S3
